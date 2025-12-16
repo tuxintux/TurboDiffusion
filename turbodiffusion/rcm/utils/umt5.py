@@ -471,7 +471,7 @@ def load_model_torch(model, ckpt_path):
             ckpt_path,
             map_location="cuda",
         )
-        model.load_state_dict(ckpt)
+        model.load_state_dict(ckpt, assign=True)
 
     distributed.sync_model_states(model, src=0)
     return model
@@ -491,12 +491,10 @@ class UMT5EncoderModel:
         self.device = device
 
         # init model
-        model = umt5_xxl(encoder_only=True, dtype=dtype, device=device).eval().requires_grad_(False)
+        model = umt5_xxl(encoder_only=True, dtype=dtype, device='meta')
         log.info(f"loading {checkpoint_path}")
         assert checkpoint_path.endswith(".pth")
-        model = load_model_torch(model, checkpoint_path)
-        self.model = model
-        self.model.to(self.device)
+        self.model = load_model_torch(model, checkpoint_path).to(device).eval()
         # init tokenizer
         self.tokenizer = HuggingfaceTokenizer(name=tokenizer_path, seq_len=text_len, clean="whitespace")
 
