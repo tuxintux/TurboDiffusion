@@ -9,6 +9,8 @@ TurboDiffusion primarily uses [SageAttention](https://github.com/thu-ml/SageAtte
 
 Paper: [TurboDiffusion: Accelerating Video Diffusion Models by 100--205 Times](https://jt-zhang.github.io/files/TurboDiffusion_Technical_Report.pdf)
 
+**Note**: the checkpoints and paper are not finalized, and will be updated later to improve quality and accuracy
+
 <div align="center">
 <img src="assets/TurboDiffusion_speedup.png" width="100%"/>
 </div>
@@ -75,7 +77,7 @@ pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation
 ## Inference
 For GPUs with more than 40GB of GPU memory, **e.g., H100, we recommend using the unquantized checkpoint (without `-quant`) and removing `--quant_linear` from the command.**
 
-1.  Download the Wan2.1 VAE and umT5 text encoder checkpoints from the official [Wan2.1](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B) repository on Huggingface:
+1.  Download the Wan2.1 VAE (**applicable for both Wan2.1 and Wan2.2**) and umT5 text encoder checkpoints from the official [Wan2.1](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B) repository on Huggingface:
 
     ```bash
     mkdir checkpoints
