@@ -48,7 +48,6 @@ torch._dynamo.config.suppress_errors = True
 RUNTIME_PARAMS = {
     "num_steps": {"type": int, "choices": [1, 2, 3, 4]},
     "num_samples": {"type": int, "min": 1},
-    "seed": {"type": int, "min": 0},
     "num_frames": {"type": int, "min": 1},
     "sigma_max": {"type": float, "min": 0.1},
 }
@@ -58,7 +57,7 @@ LAUNCH_ONLY_PARAMS = [
     "mode", "model", "dit_path", "high_noise_model_path", "low_noise_model_path",
     "resolution", "aspect_ratio", "attention_type", "sla_topk",
     "quant_linear", "default_norm", "vae_path", "text_encoder_path",
-    "boundary", "adaptive_resolution", "ode",
+    "boundary", "adaptive_resolution", "ode", "seed",
 ]
 
 
@@ -523,6 +522,7 @@ def print_config(args: argparse.Namespace, defaults: dict):
     print(f"  sla_topk:        {args.sla_topk}")
     print(f"  quant_linear:    {args.quant_linear}")
     print(f"  default_norm:    {args.default_norm}")
+    print(f"  seed:            {args.seed}")
 
     print("\n=== Runtime Configuration (adjustable) ===")
     for param in RUNTIME_PARAMS:
