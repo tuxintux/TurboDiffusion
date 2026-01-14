@@ -132,52 +132,38 @@ class T2VModel_SLA(ImaginaireModel):
         self.tensor_kwargs = {"device": "cuda", "dtype": self.precision}
         log.warning(f"DiffusionModel: precision {self.precision}")
 
-        # 1. set data keys and data information
-        self.sigma_data = config.sigma_data
-        self.setup_data_key()
-
-        # 2. setup up diffusion processing and scaling~(pre-condition), sampler
+        # 1. setup up diffusion processing and scaling~(pre-condition), sampler
         self.p_t = lazy_instantiate(config.p_t)
-        self.grad_clip = False
-        self.teacher_guidance = config.teacher_guidance
-        self.loss_scale = config.loss_scale
         if config.neg_embed_path:
             self.neg_embed = easy_io.load(config.neg_embed_path)
         else:
             self.neg_embed = None
-        self.timestep_shift = config.timestep_shift
 
-        # 3. tokenizer
-        with misc.timer("DiffusionModel: set_up_tokenizer"):
-            self.tokenizer = lazy_instantiate(config.tokenizer)
-            assert self.tokenizer.latent_ch == self.config.state_ch, f"latent_ch {self.tokenizer.latent_ch} != state_shape {self.config.state_ch}"
-
-        # 4. Set up loss options, including loss masking, loss reduce and loss scaling
-        if self.config.adjust_video_noise:
-            self.video_noise_multiplier = math.sqrt(self.config.state_t)
+        if config.adjust_video_noise:
+            self.video_noise_multiplier = math.sqrt(config.state_t)
         else:
             self.video_noise_multiplier = 1.0
 
-        # 5. create fsdp mesh if needed
+        # 2. tokenizer
+        with misc.timer("DiffusionModel: set_up_tokenizer"):
+            self.tokenizer = lazy_instantiate(config.tokenizer)
+            assert self.tokenizer.latent_ch == config.state_ch, f"latent_ch {self.tokenizer.latent_ch} != state_shape {config.state_ch}"
+
+        # 3. create fsdp mesh if needed
         if config.fsdp_shard_size > 1:
             log.info(f"FSDP size: {config.fsdp_shard_size}")
             self.fsdp_device_mesh = hsdp_device_mesh(sharding_group_size=config.fsdp_shard_size)
         else:
             self.fsdp_device_mesh = None
 
-        # 6. diffusion neural networks part
+        # 4. diffusion neural networks part
         self.set_up_model()
 
-        # 7. training states
+        # 5. training states
         if parallel_state.is_initialized():
             self.data_parallel_size = parallel_state.get_data_parallel_world_size()
         else:
             self.data_parallel_size = 1
-
-    def setup_data_key(self) -> None:
-        self.input_data_key = self.config.input_data_key  # by default it is video key for Video diffusion model
-        self.input_latent_key = self.config.input_latent_key
-        self.input_caption_key = self.config.input_caption_key
 
     def build_net(self, net_dict: LazyDict, replace_sla=False):
         init_device = "meta"
@@ -340,7 +326,7 @@ class T2VModel_SLA(ImaginaireModel):
 
         # teacher_output_B_C_T_H_W = epsilon_B_C_T_H_W - x0_B_C_T_H_W
 
-        kendall_loss = self.loss_scale * ((net_output_B_C_T_H_W - teacher_output_B_C_T_H_W) ** 2).mean(dim=(1, 2, 3, 4))
+        kendall_loss = self.config.loss_scale * ((net_output_B_C_T_H_W - teacher_output_B_C_T_H_W) ** 2).mean(dim=(1, 2, 3, 4))
         output_batch = {
             "x0": x0_B_C_T_H_W.detach().cpu(),
             "xt": xt_B_C_T_H_W.detach().cpu(),
@@ -354,18 +340,6 @@ class T2VModel_SLA(ImaginaireModel):
 
     @torch.no_grad()
     def forward(self, xt, t, condition: TextCondition):
-        """
-        Performs denoising on the input noise data, noise level, and condition
-
-        Args:
-            xt (torch.Tensor): The input noise data.
-            sigma (torch.Tensor): The noise level.
-            condition (TextCondition): conditional information, generated from self.conditioner
-
-        Returns:
-            DenoisePrediction: The denoised prediction, it includes clean data predicton (x0), \
-                noise prediction (eps_pred).
-        """
         pass
 
     # ------------------------ Sampling ------------------------
@@ -381,7 +355,7 @@ class T2VModel_SLA(ImaginaireModel):
         init_noise: torch.Tensor = None,
         num_steps: int = 50,
         sampler="UniPC",
-        timestep_shift=5.0,
+        timestep_shift=None,
     ) -> torch.Tensor:
         """
         Generate samples from the batch. Based on given batch, it will automatically determine whether to generate image or video samples.
@@ -396,7 +370,7 @@ class T2VModel_SLA(ImaginaireModel):
         """
         _, _, condition, uncondition = self.get_data_and_condition(data_batch)
 
-        input_key = self.input_data_key
+        input_key = self.config.input_data_key
 
         if n_sample is None:
             n_sample = data_batch[input_key].shape[0]
@@ -426,6 +400,9 @@ class T2VModel_SLA(ImaginaireModel):
 
         x = init_noise.to(torch.float64)
 
+        if timestep_shift is None:
+            timestep_shift = self.config.timestep_shift
+
         sigma_max = self.config.sigma_max / (self.config.sigma_max + 1)
         unshifted_sigma_max = sigma_max / (timestep_shift - (timestep_shift - 1) * sigma_max)
 
@@ -443,7 +420,7 @@ class T2VModel_SLA(ImaginaireModel):
                     x_B_C_T_H_W=x.to(**self.tensor_kwargs), timesteps_B_T=timesteps.to(**self.tensor_kwargs), **uncondition.to_dict()
                 ).float()
 
-            v_pred = v_uncond + self.teacher_guidance * (v_cond - v_uncond)
+            v_pred = v_uncond + self.config.teacher_guidance * (v_cond - v_uncond)
 
             x = sampler.step(v_pred, t, x)
 
@@ -498,7 +475,7 @@ class T2VModel_SLA(ImaginaireModel):
             with moving data to/from the GPU. Ensure that the tensor is already on the appropriate device
             and has the correct dtype (torch.uint8) to avoid unexpected behaviors.
         """
-        input_key = self.input_data_key
+        input_key = self.config.input_data_key
         # only handle video batch
         # Check if the data has already been normalized and avoid re-normalizing
         if IS_PREPROCESSED_KEY in data_batch and data_batch[IS_PREPROCESSED_KEY] is True:
@@ -521,23 +498,23 @@ class T2VModel_SLA(ImaginaireModel):
             data_batch[input_key] = rearrange(video, "b t c h w -> b c t h w")
 
     def _normalize_latent_inplace(self, data_batch: dict[str, Tensor]) -> None:
-        latents = data_batch[self.input_latent_key]
+        latents = data_batch[self.config.input_latent_key]
         assert latents.shape[2] >= self.config.state_t
-        data_batch[self.input_latent_key] = latents[:, :, : self.config.state_t, :, :]
+        data_batch[self.config.input_latent_key] = latents[:, :, : self.config.state_t, :, :]
 
     def get_data_and_condition(self, data_batch: dict[str, torch.Tensor]) -> Tuple[Tensor, TextCondition]:
         if IS_PROCESSED_KEY not in data_batch or not data_batch[IS_PROCESSED_KEY]:
-            if self.input_latent_key in data_batch:
+            if self.config.input_latent_key in data_batch:
                 self._normalize_latent_inplace(data_batch)
-                data_batch[self.input_data_key] = self.decode(data_batch[self.input_latent_key]).contiguous().float().clamp(-1, 1)
+                data_batch[self.config.input_data_key] = self.decode(data_batch[self.config.input_latent_key]).contiguous().float().clamp(-1, 1)
                 data_batch[IS_PREPROCESSED_KEY] = True
 
             self._normalize_video_inplace(data_batch)
-            data_batch[self.input_latent_key] = self.encode(data_batch[self.input_data_key]).contiguous().float()
+            data_batch[self.config.input_latent_key] = self.encode(data_batch[self.config.input_data_key]).contiguous().float()
             data_batch[IS_PROCESSED_KEY] = True
 
-        raw_state = data_batch[self.input_data_key]
-        latent_state = data_batch[self.input_latent_key]
+        raw_state = data_batch[self.config.input_data_key]
+        latent_state = data_batch[self.config.input_latent_key]
         # Condition
         if self.neg_embed is not None:
             data_batch["neg_t5_text_embeddings"] = repeat(
@@ -629,11 +606,11 @@ class T2VModel_SLA(ImaginaireModel):
 
     @torch.no_grad()
     def encode(self, state: torch.Tensor) -> torch.Tensor:
-        return self.tokenizer.encode(state) * self.sigma_data
+        return self.tokenizer.encode(state) * self.config.sigma_data
 
     @torch.no_grad()
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        return self.tokenizer.decode(latent / self.sigma_data)
+        return self.tokenizer.decode(latent / self.config.sigma_data)
 
     def get_num_video_latent_frames(self) -> int:
         return self.config.state_t
@@ -672,7 +649,7 @@ class T2VModel_SLA(ImaginaireModel):
         foreach: Optional[bool] = None,
         iteration: int = 0,
     ):
-        if not self.grad_clip:
+        if not self.config.grad_clip:
             max_norm = 1e12
         return clip_grad_norm_(
             self.net.parameters(),
